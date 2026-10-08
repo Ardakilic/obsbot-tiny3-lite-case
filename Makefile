@@ -1,9 +1,9 @@
 # OBSBOT Tiny 3 Lite case — every command runs inside Docker (python:3.12-slim);
 # nothing is installed on the host. Requires only Docker and make.
 #
-#   make              # STLs + geometry checks + previews + index.html, both variants
+#   make              # STLs + geometry checks + previews + index.html, all four variants
 #   make stl          # <variant>/tiny3lite_case_tray.stl, _case_lid.stl, _camera.stl
-#   make check        # geometry self-checks (fit, interference, watertight, detent)
+#   make check        # geometry self-checks (fit, interference, watertight, detent, magnet pockets)
 #   make preview      # <variant>/preview.png + preview.html (three.js viewer)
 #   make index        # index.html (GitHub Pages landing page)
 #   make build        # (re)build the Docker image only
@@ -13,8 +13,8 @@
 
 IMAGE    ?= obsbot-tiny3-lite-case
 OUT      ?= .
-VARIANTS ?= friction snap
-PARAMS = CAM_W CAM_D CAM_H CLEAR_L CLEAR_W CLEAR_H WALL FLOOR R_IN R_EDGE TRAY LIP_H LIP_T FIT NOTCH_R RIB SNAP SNAP_L
+VARIANTS ?= friction snap magnet magnet4
+PARAMS = CAM_W CAM_D CAM_H CLEAR_L CLEAR_W CLEAR_H WALL FLOOR R_IN R_EDGE TRAY LIP_H LIP_T FIT NOTCH_R RIB SNAP SNAP_L MAG MAG_D MAG_T POCKET_D POCKET_DEPTH LOBE_R BLEND
 RUN = docker run --rm -v "$(CURDIR)":/work -w /work $(foreach v,$(PARAMS),-e $(v)) $(IMAGE) python case.py
 
 .PHONY: all build stl check preview index clean

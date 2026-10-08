@@ -10,13 +10,14 @@ import trimesh
 from manifold3d import CrossSection, FillRule, Manifold
 
 ap = argparse.ArgumentParser()
-ap.add_argument("--variant", default="friction", choices=("friction", "snap"))
+ap.add_argument("--variant", default="friction", choices=("friction", "snap", "magnet", "magnet4"))
 ap.add_argument("--out", default="out")
 ap.add_argument("--check", action="store_true")
 ap.add_argument("--preview", action="store_true")
 ap.add_argument("--index", nargs="*", metavar="VARIANT", help="write <out>/index.html linking these variants' outputs")
 ARGS = ap.parse_args()
-VARIANT = {"friction": {"SNAP": 0}, "snap": {"SNAP": 0.3, "WALL": 2.8, "LIP_T": 1.2}}[ARGS.variant]
+VARIANT = {"friction": {}, "snap": {"SNAP": 0.3, "WALL": 2.8, "LIP_T": 1.2},
+           "magnet": {"MAG": 2, "FIT": 0.35}, "magnet4": {"MAG": 4, "FIT": 0.35}}[ARGS.variant]
 
 P = lambda k, d: float(os.environ.get(k, VARIANT.get(k, d)))  # env > variant default > default
 CAM_W, CAM_D, CAM_H = P("CAM_W", 41), P("CAM_D", 41), P("CAM_H", 58)
@@ -26,12 +27,17 @@ R_IN, R_EDGE = P("R_IN", 4), P("R_EDGE", 3)
 TRAY, LIP_H, LIP_T, FIT = P("TRAY", 15), P("LIP_H", 5), P("LIP_T", 1.0), P("FIT", 0.2)
 NOTCH_R, RIB = P("NOTCH_R", 4), P("RIB", 0.6)
 SNAP, SNAP_L = P("SNAP", 0), P("SNAP_L", 20)
+MAG, MAG_D, MAG_T = int(P("MAG", 0)), P("MAG_D", 6), P("MAG_T", 3)  # magnet pairs (0 / 2 / 4); disc diameter x thickness
+POCKET_D, POCKET_DEPTH, LOBE_R, BLEND = P("POCKET_D", 6.4), P("POCKET_DEPTH", 3.2), P("LOBE_R", 5.0), P("BLEND", 5.0)
 
 # Lying pose: the camera's 58 height runs along x, 41 width along y, 41 depth is the cavity height.
 IN_L, IN_W, IN_H = CAM_H + 2 * CLEAR_L, CAM_W + 2 * CLEAR_W, CAM_D + 2 * CLEAR_H
 OUT_L, OUT_W, OUT_H = IN_L + 2 * WALL, IN_W + 2 * WALL, IN_H + 2 * FLOOR
 R_OUT = R_IN + WALL
 Z_SPLIT = FLOOR + TRAY
+# Magnet pockets sit in outward lobes on the long walls, 0.8 mm of skin outside the lid's groove wall.
+MAG_OFF = LIP_T + FIT + 0.8 + POCKET_D / 2  # pocket centre distance outside the cavity face
+MAG_XY = [(x, s * (IN_W / 2 + MAG_OFF)) for x in {0: [], 2: [0], 4: [-IN_L / 4, IN_L / 4]}[MAG] for s in (1, -1)]
 LEAD = 0.6  # tongue tip lead-in height; tip is 0.4 thinner
 BASE_H = 23  # camera model base height (standing)
 
@@ -52,24 +58,33 @@ def lie_pt(p):
 
 
 def rrect(w, d, r):
-    """Centered w x d rounded rectangle with corner radius r, as a CrossSection."""
-    poly = shapely.box(-w / 2 + r, -d / 2 + r, w / 2 - r, d / 2 - r).buffer(r, quad_segs=16)
+    """Centered w x d rounded rectangle with corner radius r, as a shapely polygon."""
+    return shapely.box(-w / 2 + r, -d / 2 + r, w / 2 - r, d / 2 - r).buffer(r, quad_segs=16)
+
+
+def cs(poly):
+    """shapely polygon (no holes) -> manifold CrossSection."""
     return CrossSection([np.asarray(poly.exterior.coords)[:-1]], FillRule.EvenOdd)
 
 
 def ring(t, h, z):
     """Wall ring hugging the cavity outline: thickness t outward, height h, bottom at z."""
-    return (rrect(IN_L + 2 * t, IN_W + 2 * t, R_IN + t) - rrect(IN_L, IN_W, R_IN)).extrude(h).translate((0, 0, z))
+    return (cs(rrect(IN_L + 2 * t, IN_W + 2 * t, R_IN + t)) - cs(rrect(IN_L, IN_W, R_IN))).extrude(h).translate((0, 0, z))
+
+
+def outline():
+    """Plan outline: rounded rectangle plus magnet lobes, blended by a morphological closing (concave fillets)."""
+    o = rrect(OUT_L, OUT_W, R_OUT)
+    if MAG_XY:
+        o = shapely.unary_union([o] + [shapely.Point(p).buffer(LOBE_R, quad_segs=16) for p in MAG_XY])
+        o = o.buffer(BLEND, quad_segs=16).buffer(-BLEND, quad_segs=16)
+    return o
 
 
 def outer():
-    """Rounded box: vertical corner radius R_OUT, top/bottom edge radius R_EDGE. Hull of 8 tori."""
-    u, v = np.meshgrid(np.linspace(0, 2 * np.pi, 24, endpoint=False), np.linspace(0, 2 * np.pi, 16, endpoint=False))
-    rad = R_OUT - R_EDGE + R_EDGE * np.cos(v)
-    torus = np.stack([rad * np.cos(u), rad * np.sin(u), R_EDGE * np.sin(v)], -1).reshape(-1, 3)
-    cx, cy = OUT_L / 2 - R_OUT, OUT_W / 2 - R_OUT
-    pts = [torus + (sx * cx, sy * cy, z) for sx in (-1, 1) for sy in (-1, 1) for z in (R_EDGE, OUT_H - R_EDGE)]
-    return Manifold.hull_points(np.vstack(pts))
+    """Outline extruded with every edge rounded by R_EDGE: Minkowski sum of the inset prism and a sphere."""
+    prism = cs(outline().buffer(-R_EDGE, quad_segs=16)).extrude(OUT_H - 2 * R_EDGE).translate((0, 0, R_EDGE))
+    return Manifold.minkowski_sum(prism, Manifold.sphere(R_EDGE, 24))
 
 
 def wedge(y_base, z_base, y_tip, z_tip, length):
@@ -86,7 +101,7 @@ def inside(a, b, tol=1e-6):
 
 def camera():
     """Approximate Tiny 3 Lite, standing (see ENV). Eyeballed from photos; for visualisation only. Parts overlap 0.5."""
-    base = rrect(41, 41, 8).extrude(BASE_H)
+    base = cs(rrect(41, 41, 8)).extrude(BASE_H)
     table = Manifold.cylinder(5, 16.5).translate((0, 0, BASE_H - 0.5))  # turntable z 23..27.5
     post = Manifold.cube((9, 14, 18)).translate((11.5, -7, 27))  # arm post x 11.5..20.5, z 27.5..45
     post += Manifold.cylinder(9, 7).rotate((0, 90, 0)).translate((11.5, 0, 45))  # rounded arm top, reaches z 52
@@ -105,7 +120,7 @@ RING_STAND = (-5.5, -20.5, 44)  # lens ring centre on the standing camera's fron
 
 def build():
     body = outer()
-    cavity = rrect(IN_L, IN_W, R_IN).extrude(IN_H).translate((0, 0, FLOOR))
+    cavity = cs(rrect(IN_L, IN_W, R_IN)).extrude(IN_H).translate((0, 0, FLOOR))
     tongue = ring(LIP_T, LIP_H - LEAD, Z_SPLIT) + ring(LIP_T - 0.4, LEAD, Z_SPLIT + LIP_H - LEAD)
     groove = ring(LIP_T + FIT, LIP_H + 0.4, Z_SPLIT - 0.01)
 
@@ -125,7 +140,13 @@ def build():
         gw, tf, z = IN_W / 2 + LIP_T + FIT, IN_W / 2 + LIP_T, Z_SPLIT  # groove wall, tongue face
         lid += wedge(gw + 0.3, (z + 1.6, z + 3.0), gw - FIT - SNAP, (z + 2.1, z + 2.5), SNAP_L)
         tray -= wedge(tf + 0.3, (z + 1.45, z + 3.15), tf - SNAP - 0.05, (z + 1.95, z + 2.65), SNAP_L + 0.6)
-    return tray, lid, tongue, groove
+
+    pockets = Manifold()  # blind magnet pockets, open at the split plane: tray's go down, lid's go up
+    if MAG_XY:
+        pocket = Manifold.cylinder(POCKET_DEPTH, POCKET_D / 2, circular_segments=48)
+        pockets = Manifold.compose([pocket.translate((x, y, z)) for x, y in MAG_XY for z in (Z_SPLIT - POCKET_DEPTH, Z_SPLIT)])
+        tray, lid = tray - pockets, lid - pockets
+    return tray, lid, tongue, groove, cavity, pockets
 
 
 def to_trimesh(m):
@@ -148,7 +169,7 @@ def export(parts, out):
         print(f"{name:10s} {'x'.join(f'{s:.1f}' for s in size(m)):>22s} {vol:8.1f} {vol * 1.24:7.1f}  {tm.is_watertight}")
 
 
-def check(tray, lid, tongue, groove, cam_stand, cam, parts):
+def check(tray, lid, tongue, groove, cavity, pockets, cam_stand, cam, parts):
     print(f"--- {ARGS.variant} ---")
     for name, m in parts.items():
         assert m.volume() > 0 and to_trimesh(m).is_watertight, name
@@ -160,8 +181,9 @@ def check(tray, lid, tongue, groove, cam_stand, cam, parts):
     print(f"PASS lying {CAM_H:g} x {CAM_W:g} x {CAM_D:g} box clears tray (incl. ribs) and lid")
     assert (cam ^ tray).volume() < 1e-6 and (cam ^ lid).volume() < 1e-6 and inside(cam, box)
     print("PASS camera model clears tray and lid and stays inside that box")
-    assert np.allclose(size(tray + lid), (OUT_L, OUT_W, OUT_H), atol=0.05)
-    print(f"PASS assembled bbox = {OUT_L:g} x {OUT_W:g} x {OUT_H:g}")
+    ob = outline().bounds
+    assert np.allclose(size(tray + lid), (ob[2] - ob[0], ob[3] - ob[1], OUT_H), atol=0.05), size(tray + lid)
+    print(f"PASS assembled bbox = {ob[2] - ob[0]:g} x {ob[3] - ob[1]:g} x {OUT_H:g}")
     assert abs((tongue ^ groove).volume() - tongue.volume()) < 1e-6
     assert abs(lid.bounding_box()[2] - Z_SPLIT) < 1e-6 and abs(tray.bounding_box()[5] - Z_SPLIT - LIP_H) < 1e-6
     print("PASS tongue sits fully inside the groove")
@@ -177,6 +199,16 @@ def check(tray, lid, tongue, groove, cam_stand, cam, parts):
     thin = LIP_T - (SNAP + 0.05)
     assert thin >= 0.6, f"tongue only {thin:.2f} mm thick under the snap recess (< 0.6): raise LIP_T or lower SNAP"
     print(f"PASS tongue keeps {thin:.2f} mm under the recess")
+    if MAG:
+        assert (pockets ^ (tray + lid)).volume() < 1e-6 and abs(pockets.volume() - 2 * MAG * np.pi * (POCKET_D / 2) ** 2 * POCKET_DEPTH) < 2 * MAG
+        big = Manifold.cylinder(POCKET_DEPTH + 0.8, POCKET_D / 2 + 0.8, circular_segments=48)  # pocket + 0.8 mm skin, open face kept
+        shell = Manifold.compose([big.translate((x, y, z)) for x, y in MAG_XY for z in (Z_SPLIT - POCKET_DEPTH - 0.8, Z_SPLIT)]) - pockets
+        assert abs((shell ^ (tray + lid)).volume() - shell.volume()) < 1e-3, "magnet pocket breaks through a wall / groove"
+        assert (shell ^ (cavity + groove + tongue)).volume() < 1e-6
+        print(f"PASS {MAG} magnet pairs: {2 * MAG} pockets Ø{POCKET_D:g} x {POCKET_DEPTH:g} mm, coaxial across the split, >= 0.8 mm skin")
+        rec = POCKET_DEPTH - MAG_T
+        assert rec >= 0.1, f"magnets would stand proud: pocket {POCKET_DEPTH} < magnet {MAG_T} + 0.1"
+        print(f"PASS Ø{MAG_D:g} x {MAG_T:g} mm magnets sit {rec:.1f} mm recessed per side ({2 * rec:.1f} mm gap, never touch)")
 
 
 HTML = """<!doctype html><html><head><meta charset="utf-8"><title>Tiny 3 Lite Case – __VARIANT__</title>
@@ -215,8 +247,10 @@ const cam = new THREE.Group();
 cam.add(new THREE.Mesh(geo(D.cam), mat({color: 0x1a1a1a, metalness: .25, roughness: .5})));
 const ring = new THREE.Mesh(new THREE.TorusGeometry(12, 0.9, 16, 64), mat({color: 0xe3242b, emissive: 0x400000}));
 ring.position.set(...D.ring); cam.add(ring);
+const magGeo = new THREE.CylinderGeometry(D.mag.r, D.mag.r, D.mag.h, 32).rotateX(Math.PI / 2), magMat = mat({color: 0xa8a8a8, metalness: .5, roughness: .5});
+for (const [part, list] of [[tray, D.mag.tray], [lid, D.mag.lid]]) for (const p of list) { const m = new THREE.Mesh(magGeo, magMat); m.position.set(...p); part.add(m); }
 scene.add(tray, lid, cam);
-const plane = new THREE.Plane(new THREE.Vector3(-1, 0, 0), 0), mats = [tray.material, lidMat, cam.children[0].material, ring.material];
+const plane = new THREE.Plane(new THREE.Vector3(-1, 0, 0), 0), mats = [tray.material, lidMat, cam.children[0].material, ring.material, magMat];
 let printed = false;
 function update() {
   tray.visible = $('tray').checked; lid.visible = $('lid').checked; cam.visible = $('cam').checked && !printed;
@@ -272,23 +306,28 @@ def preview(tray, lid, cam, parts, out):
     ax.set(title="XZ section at y=0 (assembled, camera grey)", xlabel="x (mm)", ylabel="z (mm)")
     ax.legend(loc="lower right")
     ax = fig.add_subplot(1, 4, 4)
-    slab = Manifold.cube((0.1, 2 * OUT_W, 2 * OUT_H), True).translate((0, 0, OUT_H / 2))
+    xs = MAG_XY[0][0] if MAG_XY else 0  # cut through a magnet pocket when there is one
+    slab = Manifold.cube((0.1, 4 * OUT_W, 2 * OUT_H), True).translate((xs, 0, OUT_H / 2))
     for m, c in ((tray, blue), (lid, red)):
         section(ax, m, slab, [1, 2], c)
-    ax.set(xlim=(IN_W / 2 - 2, OUT_W / 2 + 1), ylim=(Z_SPLIT - 2, Z_SPLIT + LIP_H + 2), title="rim detail, YZ at x=0", xlabel="y (mm)", ylabel="z (mm)")
+    ax.set(xlim=(IN_W / 2 - 2, outline().bounds[3] + 1), ylim=(Z_SPLIT - 2 - (POCKET_DEPTH if MAG else 0), Z_SPLIT + LIP_H + 2),
+           title=f"rim detail, YZ at x={xs:g}", xlabel="y (mm)", ylabel="z (mm)")
     ax.set_aspect("equal")
     fig.tight_layout()
     fig.savefig(os.path.join(out, "preview.png"), dpi=110)
     print("wrote", os.path.join(out, "preview.png"))
 
     b64 = lambda m: base64.b64encode(to_trimesh(m).export(file_type="stl")).decode()
+    zt, zl = Z_SPLIT - POCKET_DEPTH + MAG_T / 2, Z_SPLIT + POCKET_DEPTH - MAG_T / 2  # magnet centres, seated at the pocket bottoms
     data = {"variant": ARGS.variant, "tray": b64(parts["case_tray"]), "lid": b64(parts["case_lid"]), "cam": b64(cam),
-            "ring": lie_pt(RING_STAND), "OUT": [OUT_L, OUT_W, OUT_H], "OUT_H": OUT_H, "Z_SPLIT": Z_SPLIT, "cam_dims": size(cam).tolist()}
+            "ring": lie_pt(RING_STAND), "OUT": size(tray + lid).tolist(), "OUT_H": OUT_H, "Z_SPLIT": Z_SPLIT, "cam_dims": size(cam).tolist(),
+            "mag": {"r": MAG_D / 2, "h": MAG_T, "tray": [[x, y, zt] for x, y in MAG_XY],
+                    "lid": [[x, -y, OUT_H - zl] for x, y in MAG_XY]}}  # lid magnets in the printed (flipped) lid's frame
     with open(os.path.join(out, "preview.html"), "w") as f:
         f.write(HTML.replace("__VARIANT__", ARGS.variant).replace("__DATA__", json.dumps(data)))
     print("wrote", os.path.join(out, "preview.html"))
-    meta = {"outer": [OUT_L, OUT_W, OUT_H], "grams": round(sum(parts[p].volume() for p in ("case_tray", "case_lid")) / 1000 * 1.24),
-            "stl": [f"tiny3lite_{p}.stl" for p in parts]}
+    meta = {"outer": size(tray + lid).tolist(), "grams": round(sum(parts[p].volume() for p in ("case_tray", "case_lid")) / 1000 * 1.24),
+            "stl": [f"tiny3lite_{p}.stl" for p in parts], "hardware": f"{2 * MAG}&times; &Oslash;{MAG_D:g}&times;{MAG_T:g} mm disc magnets" if MAG else "no hardware"}
     with open(os.path.join(out, "meta.json"), "w") as f:
         json.dump(meta, f)
 
@@ -296,7 +335,11 @@ def preview(tray, lid, cam, parts, out):
 VARIANT_INFO = {"friction": ("Friction fit", "Slip-fit tongue and groove, no hardware. Easiest to print and tune. "
                                              "Stays shut on a desk; not guaranteed upside down in a bag."),
                 "snap": ("Snap detent", "A 20 mm ridge inside the lid clicks into a recess in the tongue, so the lid stays "
-                                        "closed in a bag. Thicker walls; tune SNAP per printer.")}
+                                        "closed in a bag. Thicker walls; tune SNAP per printer."),
+                "magnet": ("Magnetic, 2 pairs", "Glide-fit tongue and groove held shut by two pairs of glued disc magnets in "
+                                                "blended lobes on the long walls. Easy one-hand open, firm hold."),
+                "magnet4": ("Magnetic, 4 pairs", "Same lobes, four magnet pairs for a stronger hold; lift one end at the thumb "
+                                                 "notch to peel two pairs at a time.")}
 
 INDEX = """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>OBSBOT Tiny 3 Lite case</title>
@@ -318,7 +361,7 @@ footer{color:var(--muted);font-size:13px;margin-top:32px}</style></head><body><m
 """
 
 CARD = """<article><a href="{v}/preview.png"><img loading="lazy" src="{v}/preview.png" alt="{title} variant renders"></a>
-<h2>{title}</h2><p class="geo">{outer} mm outer &middot; ~{grams} g of filament &middot; {desc}</p>
+<h2>{title}</h2><p class="geo">{outer} mm outer &middot; ~{grams} g of filament &middot; {hardware} &middot; {desc}</p>
 <p><a class="btn" href="{v}/preview.html">Interactive 3D preview</a> &nbsp; <a href="{v}/preview.html#cut&explode=12">section view</a></p>
 <details><summary>STL downloads</summary><ul>{stls}</ul></details></article>
 """
@@ -331,7 +374,8 @@ def index(variants, out):
             m = json.load(f)
         title, desc = VARIANT_INFO.get(v, (v, ""))
         stls = "".join(f'<li><a href="{v}/{s}">{s}</a></li>' for s in m["stl"])
-        cards.append(CARD.format(v=v, title=title, desc=desc, grams=m["grams"], stls=stls, outer=" x ".join(f"{d:.1f}" for d in m["outer"])))
+        cards.append(CARD.format(v=v, title=title, desc=desc, grams=m["grams"], stls=stls, hardware=m.get("hardware", ""),
+                                 outer=" x ".join(f"{d:.1f}" for d in m["outer"])))
     with open(os.path.join(out, "index.html"), "w") as f:
         f.write(INDEX.replace("__CARDS__", "".join(cards)))
     print("wrote", os.path.join(out, "index.html"))
@@ -342,7 +386,7 @@ if __name__ == "__main__":
         index(ARGS.index, ARGS.out)
         raise SystemExit
     os.makedirs(ARGS.out, exist_ok=True)
-    tray, lid, tongue, groove = build()
+    tray, lid, tongue, groove, cavity, pockets = build()
     lid_print = lid.rotate((180, 0, 0))
     lid_print = lid_print.translate((0, 0, -lid_print.bounding_box()[2]))
     cam_stand = camera()
@@ -350,7 +394,7 @@ if __name__ == "__main__":
     parts = {"case_tray": tray, "case_lid": lid_print, "camera": cam}
 
     if ARGS.check:
-        check(tray, lid, tongue, groove, cam_stand, cam, parts)
+        check(tray, lid, tongue, groove, cavity, pockets, cam_stand, cam, parts)
     elif ARGS.preview:
         preview(tray, lid, cam, parts, ARGS.out)
     else:

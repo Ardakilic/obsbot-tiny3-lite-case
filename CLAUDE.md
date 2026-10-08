@@ -15,7 +15,8 @@ License: MIT for code (`LICENSE`), CC BY 4.0 for models/images (`LICENSE-MODELS`
   command goes through the Makefile's `docker run`. One-off experiments: use the
   same image (`docker run --rm -v "$PWD":/work -w /work obsbot-tiny3-lite-case python ...`)
   or a throwaway container; scratch files go outside the repo.
-- **Keep both variants** (`friction`, `snap`); every `make` regenerates both.
+- **Keep all four variants** (`friction`, `snap`, `magnet`, `magnet4`); every `make`
+  regenerates all of them.
 - **Keep the camera design.** The camera dimensions, the lying pose and the
   approximate camera model live in `case.py` (`CAM_*`, `lie()`, `camera()`); do not
   re-derive them from memory. Change them only with a cited source and update the
@@ -34,19 +35,21 @@ case.py                      the whole generator: params, camera model, case geo
 Makefile / Dockerfile        canonical build path (python:3.12-slim + pinned wheels)
 .github/workflows/pages.yml  publishes the checkout to GitHub Pages on push to main
 index.html                   generated Pages landing page (make index)
-friction/  snap/             generated per variant: tiny3lite_case_tray.stl,
+friction/ snap/ magnet/ magnet4/
+                             generated per variant: tiny3lite_case_tray.stl,
                              tiny3lite_case_lid.stl, tiny3lite_camera.stl (viewer only),
                              preview.png, preview.html, meta.json (for index.html)
+renovate.json                Renovate keeps the GitHub Actions / Docker pins current (PRs)
 README.md                    user-facing docs; AGENTS.md points here
 ```
 
 ## Commands
 
 ```bash
-make                 # stl + check + preview + index, both variants (builds the image first)
+make                 # stl + check + preview + index, all four variants (builds the image first)
 make stl | check | preview | index
 make VARIANTS=snap SNAP=0.25     # one variant, with parameter overrides (env vars)
-make clean           # removes friction/ snap/ index.html
+make clean           # removes the variant folders and index.html
 open snap/preview.html           # viewer; needs internet for the three.js CDN
 ```
 
@@ -92,6 +95,9 @@ History: **v1 (rejected)** stood the camera upright in a 44 x 44 x 61 cup split 
 36 mm — "just a box", and you would pull the camera out by the gimbal head.
 **v2 (current)** lays it flat like the organizer. User question "will it stay
 closed?" → honest answer no (slip fit) → the **snap** variant was added; both kept.
+Then the user asked for magnet designs like filtarr's → **magnet** (2 pairs) and
+**magnet4** (4 pairs) were added (2026-10-08); the outer shell moved from a hull of
+tori to a Minkowski sum so the lobes get the same edge rounding.
 
 Shared geometry (mm, assembled coordinates, z up, tray floor at z=0, centred x/y):
 
@@ -101,8 +107,10 @@ Shared geometry (mm, assembled coordinates, z up, tray floor at z=0, centred x/y
   above the floor.
 - Cavity `IN_L x IN_W x IN_H` = (58+2·1.0) x (41+2·2.1) x (41+2·1.0) = 60 x 45.2 x 43,
   vertical corner radius `R_IN` 4. Outer = cavity + 2·WALL / 2·FLOOR, vertical
-  corners `R_OUT` = R_IN + WALL, top/bottom edges rounded `R_EDGE` 3 (outer body =
-  convex hull of 8 sampled tori, `outer()`).
+  corners `R_OUT` = R_IN + WALL. `outline()` is the plan shape (shapely: rounded
+  rectangle ∪ magnet lobes, then a closing `buffer(BLEND).buffer(-BLEND)` for concave
+  fillets); `outer()` = `Manifold.minkowski_sum(extrude(outline.buffer(-R_EDGE)),
+  sphere(R_EDGE))`, so every edge, lobes included, is rounded by `R_EDGE` 3.
 - **Shallow tray + deep lid**: the tray holds `TRAY` = 15 of the 43 mm cavity
   (split plane `Z_SPLIT` = FLOOR + 15 = 17.4); the lid holds the other 28. With
   26 mm of the camera exposed when open you grab the body from the sides — that is
@@ -123,16 +131,32 @@ Shared geometry (mm, assembled coordinates, z up, tray floor at z=0, centred x/y
   length SNAP_L+0.6). The full-thickness tongue band above the recess (+3.15..+4.4)
   retains the lid; the 1.4 mm lid wall flexes outward to click. Corners/end walls get
   nothing (too stiff; notches live there).
+- **Magnets** (`MAG` pairs > 0; filtarr's magnet-skirt idea): Ø`MAG_D` 6 x `MAG_T` 3
+  discs in blind pockets Ø`POCKET_D` 6.4 x `POCKET_DEPTH` 3.2 (0.2 recess per side →
+  0.4 gap, pairs never touch). Pocket centres `MAG_XY`: y = ±(IN_W/2 + `MAG_OFF`),
+  MAG_OFF = LIP_T + FIT + 0.8 + POCKET_D/2 (0.8 skin outside the lid groove wall);
+  x = 0 for MAG 2, ±IN_L/4 (= ±15) for MAG 4. Each pocket sits in a full-height lobe
+  of radius `LOBE_R` 5 on the outside of the long wall, blended with `BLEND` 5. Tray
+  pockets go down from Z_SPLIT, lid pockets up from Z_SPLIT (both open toward the
+  print top — no bridging). FIT is 0.35 (glide) in the magnet variants. End walls
+  keep the thumb notches so one end can be peeled first. filtarr's flat-lid and
+  pedestal designs were NOT ported: they need a deep tray, which defeats the easy
+  grab. Viewer draws grey cylinders in the pockets (`D.mag`, lid ones in the
+  printed-lid frame: (x, −y, OUT_H − z)).
 - Lid export: `lid.rotate((180,0,0))` then shifted so min z = 0 (open side up). The
   viewer puts it back with `rotation.x = π; position.z = OUT_H` (lid is symmetric in y).
 
-| Variant | Defaults | Outer (mm) | ~g (PETG) |
-|---|---|---|---|
-| friction | SNAP 0, WALL 2.4, LIP_T 1.0, FIT 0.2 | 64.8 x 50.0 x 47.8 | 44 |
-| snap | SNAP 0.3, WALL 2.8, LIP_T 1.2, FIT 0.2 | 65.6 x 50.8 x 47.8 | 50 |
+| Variant | Defaults | Outer (mm) | ~g (PETG) | Hardware |
+|---|---|---|---|---|
+| friction | SNAP 0, WALL 2.4, LIP_T 1.0, FIT 0.2 | 64.8 x 50.0 x 47.8 | 44 | none |
+| snap | SNAP 0.3, WALL 2.8, LIP_T 1.2, FIT 0.2 | 65.6 x 50.8 x 47.8 | 50 | none |
+| magnet | MAG 2, FIT 0.35 | 64.8 x 65.9 x 47.8 | 53 | 4 x Ø6x3 magnets |
+| magnet4 | MAG 4, FIT 0.35 | 64.8 x 65.9 x 47.8 | 62 | 8 x Ø6x3 magnets |
 
 Why the snap variant is thicker: the recess leaves `LIP_T − (SNAP+0.05)` of tongue
-(0.85 at defaults); `make check` refuses < 0.6.
+(0.85 at defaults); `make check` refuses < 0.6. Opening forces (filtarr's measured
+data, Ø6x3 pairs): 4 pairs ≈ 25–30 N straight pull, hence the peel-first advice;
+2 pairs ≈ half that.
 
 ## Checks (`make check`, per variant, plain asserts → PASS lines)
 
@@ -141,8 +165,11 @@ lying 58 x 41 x 41 box clears tray (incl. ribs) and lid; camera model clears bot
 stays inside that box; assembled bbox = OUT within 0.05; tongue fully inside groove
 and lid min-z == Z_SPLIT, tray max-z == Z_SPLIT + LIP_H; camera model inside the
 standing envelope; **closure**: lid lifted 1 mm interferes by > 0.5 mm³ (snap, ≈7 mm³
-at defaults) or by 0 (friction); tongue thickness under the recess ≥ 0.6.
-A new feature needs a new check here.
+at defaults) or by 0 (all others); tongue thickness under the recess ≥ 0.6;
+**magnets**: pockets fully subtracted with the expected total volume, a +0.8 mm shell
+around every pocket is entirely material (no break-through into wall, cavity, groove
+or tongue), pockets coaxial across the split by construction, `POCKET_DEPTH − MAG_T`
+≥ 0.1. A new feature needs a new check here.
 
 ## Technology decisions
 
@@ -151,8 +178,11 @@ A new feature needs a new check here.
   binary STL and confirm watertightness, **matplotlib** (Agg) for `preview.png`.
   Pinned in the Dockerfile (manifold3d 3.5.4); bumping pins may re-triangulate
   every STL — regenerate and commit outputs with the bump.
-- Convex outer shell via `Manifold.hull_points` of torus samples (no Minkowski
-  needed); all other features are extruded CrossSections or hulls of 8 corners.
+- Outer shell via `Manifold.minkowski_sum` (available since manifold3d 3.x; ≈2–4 s
+  with lobes, instant without). Earlier versions used a convex hull of torus samples,
+  which cannot do lobes. All other features are extruded CrossSections, hulls of 8
+  corners (`wedge`) or cylinders. `rrect()` returns a shapely polygon; `cs()` turns a
+  hole-free polygon into a CrossSection.
 - `R_IN` must be ≤ ~3.4 × the smaller clearance or a sharp-cornered camera box
   cannot fit a rounded cavity; the check catches it.
 - **Viewer** (`HTML` template in case.py): three.js **0.160.0 from the jsdelivr CDN via
@@ -184,5 +214,5 @@ groove and, for snap, the bump seated in the recess — look at it after any rim
 
 - No test print yet. After the first print: tune `FIT` (lid tight/loose), `SNAP`
   (hard to close → lower by 0.05; pops open → raise), `CLEAR_W`/`RIB` (rattle/bind).
-- Possible additions if asked: magnet closure (needs ~5.6 mm end walls for 4 x 2 mm
-  discs), a USB-C cable pocket, engraved lid text (see filtarr for the TextPath approach).
+- Possible additions if asked: a USB-C cable pocket, engraved lid text (see filtarr
+  for the TextPath approach), a magnet-count/positions override beyond 2/4.
