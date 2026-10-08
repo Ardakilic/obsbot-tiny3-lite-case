@@ -1,0 +1,39 @@
+name: Publish previews to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pages must be enabled once for the repo (Settings -> Pages -> Source:
+      # GitHub Actions, or `gh api -X POST repos/<owner>/<repo>/pages -f
+      # build_type=workflow`) — the workflow token cannot create the site.
+      - uses: actions/configure-pages@v5
+
+      # The whole checkout is the site: index.html links each variant's
+      # interactive preview, render sheet and STL downloads (all committed,
+      # regenerated locally with `make`).
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+
+      - id: deployment
+        uses: actions/deploy-pages@v4

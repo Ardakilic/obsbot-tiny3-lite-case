@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.DS_Store
+.claude/settings.local.json
+# third-party reference model (Printables 1620707, used only to measure the pocket) — local only
+tiny-3-lite.stl
+# old output layout
+out/
