@@ -142,7 +142,12 @@ Shared geometry (mm, assembled coordinates, z up, tray floor at z=0, centred x/y
   keep the thumb notches so one end can be peeled first. filtarr's flat-lid and
   pedestal designs were NOT ported: they need a deep tray, which defeats the easy
   grab. Viewer draws grey cylinders in the pockets (`D.mag`, lid ones in the
-  printed-lid frame: (x, −y, OUT_H − z)).
+  printed-lid frame: (x, −y, OUT_H − z)). Magnet safety (README FAQ, user asked
+  2026-10-08): magnet edge ≈ 4.25 mm from the camera skin, centre ≈ 11.5 mm from the
+  turntable edge; Ø6x3 N35 on-axis ≈ 70 mT at 4 mm, 10 mT at 10 mm, equatorial about
+  half → ≈ 15–25 mT at the camera surface, < 5 mT at the motors; NdFeB needs ≈ 1 T to
+  demagnetize; OBSBOT's own Tiny 3 base carries a magnet. Harmless to the camera;
+  warn about mag-stripe cards (fail at 3–40 mT) near the lobes.
 - Lid export: `lid.rotate((180,0,0))` then shifted so min z = 0 (open side up). The
   viewer puts it back with `rotation.x = π; position.z = OUT_H` (lid is symmetric in y).
 

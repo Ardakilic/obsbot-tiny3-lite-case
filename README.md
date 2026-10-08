@@ -90,6 +90,28 @@ up. Fit tuning after a test print — change parameters, never the geometry:
    closed. Gel superglue or 5-minute epoxy is cleaner than thin superglue, whose fumes
    can leave a white residue.
 
+## FAQ
+
+**Will the magnets harm the webcam in long-term storage (magnet and magnet4)?**
+No. In both variants the magnets sit outside the lid's groove wall, so a magnet's edge
+is about 4 mm from the camera's skin (2 mm of plastic plus the 2 mm side clearance)
+and about 11 mm from the pan motor in the turntable; the 4-pair variant adds magnets
+beside the base and the tilt axle at the same distances. A Ø6 × 3 mm N35 disc gives
+roughly 400 mT at its face, but the field falls off steeply and the camera lies beside
+the magnets, not on their axis: about 15–25 mT at the camera's surface and under 5 mT
+at the motors, fridge-magnet territory. Nothing in the camera can be hurt by that:
+the gimbal's brushless motors run on their own neodymium magnets (≈1 T, and it takes a
+field of that order to demagnetize them), the angle encoders only read wrong while a
+field is present and the camera is off in the case, and the CMOS sensor, flash memory,
+MEMS microphones and focus actuator are not magnetic media. OBSBOT itself seats a
+stronger magnet permanently in the base of the regular Tiny 3 for its mount
+([Digital Camera World](https://www.digitalcameraworld.com/tech/webcams/obsbot-tiny-3-review)),
+and makers of magnetic camera accessories report no effects on cameras, phones or
+laptops ([MagMod](https://support.magnetmod.com/en-US/will-magnets-damage-my-camera-gear-or-electronic-equipment-232239)).
+The caveat is about other things, not the camera: the lobes carry tens of mT at their
+surface, enough to wipe a magnetic-stripe hotel card, so keep the closed case away from
+cards, mechanical watches and medical implants.
+
 ## Building it yourself
 
 Requires only Docker and `make`; nothing is installed on the host.
