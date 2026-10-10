@@ -31,7 +31,7 @@ jobs:
       # The whole checkout is the site: index.html links each variant's
       # interactive preview, render sheet and STL downloads (all committed,
       # regenerated locally with `make`).
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: .
 
